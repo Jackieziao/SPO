@@ -15,22 +15,6 @@ def bernoulli(p):
 
 def generate_poly_kernel_data(B_true, n, degree, inner_constant=1, outer_constant=1, kernel_damp_normalize=True, 
                               kernel_damp_factor=1, noise=True, noise_half_width=0, normalize_c=True, normalize_small_threshold = 0.0001):
-    """
-        generate_poly_kernel_data(B_true, n, degree; inner_constant=1, outer_constant = 1, kernel_damp_normalize=true,
-            kernel_damp_factor=1, noise=true, noise_half_width=0, normalize_c=true)
-
-    Generate (X, c) from the polynomial kernel model X_{ji} ~ N(0, 1) and
-    c_i(j) = ( (alpha_j * B_true[j,:] * X[:,i]  + inner_constant)^degree + outer_constant ) * epsilon_{ij} where
-    alpha_j is a damping term and epsilon_{ij} is a noise term.
-
-    # Arguments
-    - `kernel_damp_normalize`: if true, then set
-    alpha_j = kernel_damp_factor/norm(B_true[j,:]). This results in
-    (alpha_j * B_true[j,:] * X[:,i]  + inner_constant) being normally distributed with
-    mean inner_constant and standard deviation kernel_damp_factor.
-    - `noise`:  if true, generate epsilon_{ij} ~  Uniform[1 - noise_half_width, 1 + noise_half_width]
-    - `normalize_c`:  if true, normalize c at the end of everything
-    """
     d, p = B_true.shape
     X_observed = np.random.normal(0, 1, (p, n))
     dot_prods = np.matmul(B_true, X_observed)
@@ -120,18 +104,6 @@ class Shortest_path_solver:
         self.model.setObjective(y@ self.x, gp.GRB.MINIMIZE)
         self.model.optimize()
         return [self.x.x, self.model.objVal]
-    
-# def oracle_dataset(c, oracle):
-#     """
-#     Apply the optimization oracle to each column of the d x n matrix c, return
-#     an n vector of z_star values and a d x n matrix of optimal solutions
-#     """
-#     d, n = c.shape
-#     z_star = np.zeros(n)
-#     x_star = np.zeros((d, n))
-#     for i in range(n):
-#         x_star[:, i], z_star[i] = oracle(c[:, i])
-#     return z_star, x_star
 
 def convert_grid_to_list(dim1, dim2):
     G = nx.grid_2d_graph(dim1, dim2)
