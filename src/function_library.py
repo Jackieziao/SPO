@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from math import sqrt
 
 
-############################################## Loss function #############################################
+############################################## Data Generation function #############################################
 def bernoulli(p):
     if random.random() <= p:
         return 1
@@ -75,7 +75,7 @@ def batch_solve(solver, y, relaxation =False):
     for i in range(len(y)):
         sol.append(solver.solve(y[i], relaxation=relaxation)[0])
         value.append(solver.solve(y[i], relaxation=relaxation)[1])
-    return np.transpose(np.array(sol)), np.transpose(np.array(value).reshape(-1, 1))
+    return np.transpose(np.array(value).reshape(-1, 1)), np.transpose(np.array(sol))
 
 # Create and show the graph
 def define_graph(grid_width, showflag=False):
@@ -133,24 +133,56 @@ class Shortest_path_solver:
 #         x_star[:, i], z_star[i] = oracle(c[:, i])
 #     return z_star, x_star
 
-# def convert_grid_to_list(dim1, dim2):
-#     G = nx.grid_2d_graph(dim1, dim2)
-#     sources = []
-#     destinations = []
-#     for edge in G.edges():
-#         sources.append(edge[0])
-#         destinations.append(edge[1])
-#     return sources, destinations
+def convert_grid_to_list(dim1, dim2):
+    G = nx.grid_2d_graph(dim1, dim2)
+    sources = []
+    destinations = []
+    for edge in G.edges():
+        sources.append(edge[0])
+        destinations.append(edge[1])
+    return sources, destinations
 
 ############################################## Loss function #############################################
-def spo_plus_loss():
-    return None
+def spo_loss(B_new, X, c, solver, z_star=[]):
+    if z_star == []:
+        z_star, w_star =batch_solve(solver, c)
+    n = z_star.shape[1]
+    spo_sum = 0
+    for i in range(n):
+        c_hat = np.dot(B_new, X[:, i])
+        c_hat = B_new@X[:, i]
+        w_oracle = solver.solve(c_hat)[0]
+        spo_loss_cur = np.dot(c[:, i], w_oracle) - z_star[:, i]
+        spo_sum += spo_loss_cur
+    spo_loss_avg = spo_sum / n
+    return spo_loss_avg
 
-def least_squares_loss(y_hat, y):
-    return None
+def least_squares_loss(B_new, X, c):
+    n = X.shape[1]
+    residuals = np.dot(B_new, X) - c
+    error = (1/n)*(1/2)*np.linalg.norm(residuals)**2
+    return error
 
-def absolute_loss():
-    return None
+def absolute_loss(B_new, X, c):
+    n = X.shape[1]
+    residuals = np.dot(B_new, X) - c
+    error = (1/n)*np.linalg.norm(residuals, 1)
+    return error
 
-def random_forests():
-    return None
+def spo_plus_loss(B_new, X, c, solver, z_star=[], w_star=[]):
+    if z_star == [] or w_star == []:
+        z_star, w_star =batch_solve(solver, c)
+    spo_plus_sum = 0
+    z_star = np.transpose(np.array(z_star))
+    n = X.shape[0]
+    for i in range(n):
+        c_hat = B_new @ X[:, i]
+        spoplus_cost_vec = 2 * c_hat - c[:, i]
+        z_oracle= solver.solve(spoplus_cost_vec)[1]
+
+        spo_plus_cost = -z_oracle + 2 * np.dot(c_hat, w_star[:, i]) - z_star[i]
+        spo_plus_sum += spo_plus_cost
+
+    spo_plus_avg = spo_plus_sum / n
+    return spo_plus_avg
+############################################## Validate function #############################################
