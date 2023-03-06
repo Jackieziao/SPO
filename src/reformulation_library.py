@@ -1,8 +1,20 @@
 from dataclasses import dataclass
+from typing import Union
+import attr
 from typing import List
 from function_library import *
-from scipy import sparse
 import cvxpy as cp
+from sklearn.ensemble import RandomForestRegressor
+
+
+@attr.s(auto_attribs=True)
+class replication_results:
+    SPOplus_spoloss_test: Union[float, None] = None
+    LS_spoloss_test: Union[float, None] = None
+    RF_spoloss_test: Union[float, None] = None
+    Absolute_spoloss_test: Union[float, None] = None
+    Baseline_spoloss_test: Union[float, None] = None
+    zstar_avg_test: Union[float, None] = None
 
 @dataclass
 class shortest_path_graph:
@@ -13,7 +25,7 @@ class shortest_path_graph:
     acyclic: bool = True
     grid_dim : int = 5
 
-@dataclass(frozen=True)
+@dataclass()
 class ValParms:
     algorithm_type: str = 'sp_spo_plus_reform'
     validation_set_percent: float = 0.2
@@ -23,7 +35,7 @@ class ValParms:
     resolve_sgd_accuracy: float = 0.00001
     resolve_iteration_limit: int = 50000
 
-@dataclass(frozen=True)
+@dataclass()
 class PathParms:
     lambda_max: None = None
     lambda_min_ratio: float = 0.0001
@@ -36,6 +48,11 @@ class PathParms:
     po_loss_function: str = "leastSquares"
     verbose: bool = False
     algorithm_type: str = "fake_algorithm"
+
+@dataclass
+class rf_graph:
+    num_trees : int = 100
+    num_features_per_split : int = -1
 
 class ShortestPathSolver:
     def __init__(self,A,b):
@@ -186,14 +203,79 @@ def sp_reformulation_path(X, c, solver, sp_graph, path_alg_parms):
 
     return B_soln_list, lambdas
 
-def validation_set_alg(X_train, c_train, X_validation, c_validation, solver, sp_graph):
-    val_alg_parms = ValParms().__dict__
+def leastSquares_path_jump(X, c, solver, sp_graph, path_alg_parms):
     path_alg_parms = PathParms().__dict__
+    sp_graph_parms = sp_graph
+    sources = sp_graph_parms['sources']
+    destinations = sp_graph_parms['destinations']
+    grid_dim = sp_graph_parms['grid_dim']
+    lambda_max = path_alg_parms['lambda_max']
+    lambda_min_ratio = path_alg_parms['lambda_min_ratio']
+    num_lambda = path_alg_parms['num_lambda']
+    po_loss_function = path_alg_parms['po_loss_function']
+
+    p, n = X.shape
+    d, n2 = c.shape
+    if n != n2:
+        raise ValueError("Dimensions of the input are mismatched.")
+    # Process graph
+    nodes = set(sources) | set(destinations)
+    n_nodes = len(nodes)
+    n_edges = len(sources)
+    if n_edges != d:
+        raise ValueError("Dimensions of the input are mismatched.")
+    # Hard code sparse incidence matrix!
+    A, b = CreateShortestPathConstraints(grid_dim)
+
+    X = X.T
+    c = c.T
+    solver = ShortestPathSolver(A, b)
+    W = np.apply_along_axis(solver.solve, 1, c)#W has shape [num_samples, num_edges]
+    #define linear program variables
+    B = cp.Variable((d, p)) #B has shape [num_edges, num_features]
+
+    if po_loss_function == 'leastSquares':
+        obj_expr_noreg = cp.sum_squares(c-X@B.T)
+        solver='SCS'
+        constraint = []
+    elif po_loss_function == 'absolute':
+        w = cp.Variable((d, n), nonneg = True)
+        constraint =[c-X@B.T <= w.T, -(c-X@B.T) <= w.T]
+        # @constraint(mod, c - B_var*X .<= w_var)
+        # @constraint(mod, -(c - B_var*X) .<= w_var)
+        solver = 'ECOS'
+        obj_expr_noreg = 2*cp.sum(cp.multiply(w, np.ones((d, n))))
+
+    # Add regularization part
+    if lambda_max is None:
+        lambda_max = (d/n)*(np.linalg.norm(X)**2)
+
+    # Construct lambda sequence
+    if num_lambda == 1 and lambda_max == 0:
+        lambdas = [0.0]
+    else:
+        lambda_min = lambda_max*lambda_min_ratio
+        log_lambdas = np.linspace(np.log(lambda_min), np.log(lambda_max), num=num_lambda)
+        lambdas = np.exp(log_lambdas)
+    B_soln_list = []
+
+    for lambda_ in lambdas:
+        obj_expr_full = obj_expr_noreg + n*(lambda_/2)*cp.atoms.norm(B, 'fro')
+        prob = cp.Problem(cp.Minimize(obj_expr_full), constraint)
+        prob.solve(solver=solver)
+        B_soln_list.append(B.value)
+    return B_soln_list, lambdas
+
+def validation_set_alg(X_train, c_train, X_validation, c_validation, solver, sp_graph, val_alg_parms, path_alg_parms):
+    val_alg_parms = val_alg_parms.__dict__
+    path_alg_parms = path_alg_parms.__dict__
     sp_graph = sp_graph.__dict__
     algorithm_type = val_alg_parms['algorithm_type']
     validation_loss = val_alg_parms['validation_loss']
     if algorithm_type == 'sp_spo_plus_reform':
         B_soln_list, lambdas = sp_reformulation_path(X_train, c_train, solver, sp_graph, path_alg_parms)
+    elif algorithm_type == 'ls_jump':
+        B_soln_list, lambdas = leastSquares_path_jump(X_train, c_train, solver, sp_graph, path_alg_parms)
     num_lambda = len(lambdas)
     validation_loss_list = np.zeros(num_lambda)
     for i in range(num_lambda):
@@ -212,3 +294,37 @@ def validation_set_alg(X_train, c_train, X_validation, c_validation, solver, sp_
     best_B_matrix = B_soln_list[best_ind]
     return best_B_matrix, best_lambda
 
+################################################## Decision Tree functions ########################################
+
+def train_random_forests_po(X: np.ndarray, c: np.ndarray, rf_alg_parms=rf_graph()):
+    num_trees = rf_alg_parms.__dict__['num_trees']
+    num_features_per_split = rf_alg_parms.__dict__['num_features_per_split']
+
+    p, n = X.shape
+    d, n2 = c.shape
+    if n != n2:
+        raise ValueError("Dimensions of the input are mismatched.")
+    X_t = X.T
+    # If num_features_per_split is not specified, use default for regression
+    if num_features_per_split < 1:
+        num_features_per_split = int(np.ceil(p/3))
+
+    rf_model_list = []
+
+    # train one model for each component
+    for j in range(d):
+        c_vec = c[j, :]
+        rf_model = RandomForestRegressor(n_estimators=num_trees, max_features=num_features_per_split)
+        rf_model.fit(X_t, c_vec)
+        rf_model_list.append(rf_model)
+
+    return rf_model_list
+
+def predict_random_forests_po(rf_model_list, X_new):
+    p, n = X_new.shape
+    d = len(rf_model_list)
+    X_new_t = X_new.T
+    preds = np.zeros((d, n))
+    for j in range(d):
+        preds[j, :] = rf_model_list[j].predict(X_new_t)
+    return preds

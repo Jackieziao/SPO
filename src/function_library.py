@@ -185,4 +185,3 @@ def spo_plus_loss(B_new, X, c, solver, z_star=[], w_star=[]):
 
     spo_plus_avg = spo_plus_sum / n
     return spo_plus_avg
-############################################## Validate function #############################################
