@@ -2,6 +2,7 @@
 This library includs some parameter data structure and dataframe of the final result..
 
 ''' 
+from type_library import *
 from dataclasses import dataclass
 from typing import Union
 import attr

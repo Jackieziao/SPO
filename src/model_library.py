@@ -2,8 +2,9 @@
 This library including all the functions used for the modelling and reformulation method.
 
 ''' 
-from pre_library import *
 from type_library import *
+from pre_library import *
+from pre_library import spo_loss
 import cvxpy as cp
 from sklearn.ensemble import RandomForestRegressor
 import numpy as np
