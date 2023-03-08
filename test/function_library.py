@@ -122,7 +122,7 @@ def spo_loss(B_new, X, c, solver, z_star=[]):
     spo_sum = 0
     for i in range(n):
         c_hat = np.dot(B_new, X[:, i])
-        c_hat = B_new@X[:, i]
+        # c_hat = B_new@X[:, i]
         w_oracle = solver.solve(c_hat)[0]
         spo_loss_cur = np.dot(c[:, i], w_oracle) - z_star[:, i]
         spo_sum += spo_loss_cur

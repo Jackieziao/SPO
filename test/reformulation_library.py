@@ -6,7 +6,6 @@ from function_library import *
 import cvxpy as cp
 from sklearn.ensemble import RandomForestRegressor
 
-
 @attr.s(auto_attribs=True)
 class replication_results:
     SPOplus_spoloss_test: Union[float, None] = None
@@ -41,7 +40,7 @@ class PathParms:
     lambda_min_ratio: float = 0.0001
     num_lambda: int = 10
     solver: str = "Gurobi"
-    regularization: str = "ridge"
+    regularization: str = "lasso"
     regularize_first_column_B: bool = False
     upper_bound_B_present: bool = False
     upper_bound_B: float = 10.0**6
@@ -159,6 +158,7 @@ def sp_reformulation_path(X, c, solver, sp_graph, path_alg_parms):
     lambda_max = path_alg_parms['lambda_max']
     lambda_min_ratio = path_alg_parms['lambda_min_ratio']
     num_lambda = path_alg_parms['num_lambda']
+    regularization = path_alg_parms['regularization']
 
     p, n = X.shape
     d, n2 = c.shape
@@ -192,14 +192,25 @@ def sp_reformulation_path(X, c, solver, sp_graph, path_alg_parms):
         lambda_min = lambda_max*lambda_min_ratio
         log_lambdas = np.linspace(np.log(lambda_min), np.log(lambda_max), num=num_lambda)
         lambdas = np.exp(log_lambdas)
+    
+    # Add theta variables for Lasso
+    if regularization == 'lasso':
+        theta = cp.Variable((d, p))
     B_soln_list = []
 
     for lambda_ in lambdas:
-        objective += n*(lambda_/2)*cp.atoms.norm(B, 'fro')
-        prob = cp.Problem(cp.Minimize(objective), 
-                                    [(P@A) <= ((2*(X@B.T)) - c)])
+        if regularization == 'lasso':
+            objective += n*lambda_*cp.sum(theta)
+            prob = cp.Problem(cp.Minimize(objective), [(P@A) <= ((2*(X@B.T)) - c), theta >= B, theta >= -B])
+        else:
+            objective += n*(lambda_/2)*cp.atoms.norm(B, 'fro')
+            prob = cp.Problem(cp.Minimize(objective), 
+                                        [(P@A) <= ((2*(X@B.T)) - c)])
         prob.solve()
-        B_soln_list.append(B.value)
+        B_matrix = B.value
+        if B_matrix is None:
+            B_matrix = np.zeros((d, p))
+        B_soln_list.append(B_matrix)
 
     return B_soln_list, lambdas
 
@@ -213,6 +224,7 @@ def leastSquares_path_jump(X, c, solver, sp_graph, path_alg_parms):
     lambda_min_ratio = path_alg_parms['lambda_min_ratio']
     num_lambda = path_alg_parms['num_lambda']
     po_loss_function = path_alg_parms['po_loss_function']
+    regularization = path_alg_parms['regularization']
 
     p, n = X.shape
     d, n2 = c.shape
@@ -257,13 +269,25 @@ def leastSquares_path_jump(X, c, solver, sp_graph, path_alg_parms):
         lambda_min = lambda_max*lambda_min_ratio
         log_lambdas = np.linspace(np.log(lambda_min), np.log(lambda_max), num=num_lambda)
         lambdas = np.exp(log_lambdas)
+    
+    # Add theta variables for Lasso
+    if regularization == 'lasso':
+        theta = cp.Variable((d, p))
+
     B_soln_list = []
 
     for lambda_ in lambdas:
-        obj_expr_full = obj_expr_noreg + n*(lambda_/2)*cp.atoms.norm(B, 'fro')
-        prob = cp.Problem(cp.Minimize(obj_expr_full), constraint)
+        if regularization == 'lasso':
+            obj_expr_full = obj_expr_noreg + 2*n*lambda_*cp.sum(theta)
+            prob = cp.Problem(cp.Minimize(obj_expr_full), constraint + [theta >= B, theta >= -B])
+        else:
+            obj_expr_full = obj_expr_noreg + n*(lambda_/2)*cp.atoms.norm(B, 'fro')
+            prob = cp.Problem(cp.Minimize(obj_expr_full), constraint)
         prob.solve(solver=solver)
-        B_soln_list.append(B.value)
+        B_matrix = B.value
+        if B_matrix is None:
+            B_matrix = np.zeros((d, p))
+        B_soln_list.append(B_matrix)
     return B_soln_list, lambdas
 
 def validation_set_alg(X_train, c_train, X_validation, c_validation, solver, sp_graph, val_alg_parms, path_alg_parms):

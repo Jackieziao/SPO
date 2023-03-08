@@ -43,14 +43,7 @@ def shortest_path_replication(grid_dim, n_train, n_holdout, n_test,p_features, p
                               num_lambda = 10, lambda_max = None, lambda_min_ratio = 0.0001, regularization = 'ridge', 
                               different_validation_losses = False, include_rf = True):
 
-    different_validation_losses = False
-    n_holdout = 1000
-    n_test = 1000
-    grid_dim = 5
-    p_features = 5
-    n_train = 1000
-    polykernel_degree = 1
-    polykernel_noise_half_width = 0
+    # Set up data
     d_feasibleregion = 2 * p_features * (p_features - 1)
     sources, destinations = convert_grid_to_list(grid_dim, grid_dim)
     sp_graph = shortest_path_graph(sources = sources, destinations = destinations,
@@ -114,10 +107,10 @@ def shortest_path_replication(grid_dim, n_train, n_holdout, n_test,p_features, p
     else:
         final_results.RF_spoloss_test = None
 
-    c_bar_test_preds = np.zeros((d_feasibleregion, n_test))
-    for i in range(n_test):
-        c_bar_test_preds[:, i] = c_bar_train
-    final_results.Baseline_spoloss_test = spo_loss(np.matrix(np.eye(d_feasibleregion)), c_bar_test_preds, c_test, solver)
+    # c_bar_test_preds = np.zeros((d_feasibleregion, n_test))
+    # for i in range(n_test):
+    #     c_bar_test_preds[:, i] = c_bar_train
+    # final_results.Baseline_spoloss_test = spo_loss(np.matrix(np.eye(d_feasibleregion)), c_bar_test_preds, c_test, solver)
 
     final_results.zstar_avg_test = np.mean(z_test)
 
