@@ -1,152 +1,118 @@
 '''
-This library including all the functions used for the modelling and reformulation method.
+This library includs all the functions used before the modelling and reformulation method.
+Including data generation, main loop for different experiments, and some helper functions.
 
 ''' 
-from type_library import *
-from model_library import batch_solve
+from helper_library import *
+import numpy as np
 import cvxpy as cp
 from sklearn.ensemble import RandomForestRegressor
-import numpy as np
 
-############################################## Loss function #############################################
-def spo_loss(B_new, X, c, solver, z_star=[]):
-    if z_star == []:
-        z_star, w_star =batch_solve(solver, c)
-    n = z_star.shape[1]
-    spo_sum = 0
-    for i in range(n):
-        c_hat = np.dot(B_new, X[:, i])
-        # c_hat = B_new@X[:, i]
-        w_oracle = solver.solve(c_hat)[0]
-        spo_loss_cur = np.dot(c[:, i], w_oracle) - z_star[:, i]
-        spo_sum += spo_loss_cur
-    spo_loss_avg = spo_sum / n
-    return spo_loss_avg
+################################################### Main loop ###################################################
+def shortest_path_replication(grid_dim, n_train, n_holdout, n_test,p_features, polykernel_degree, polykernel_noise_half_width, 
+                              num_lambda = 10, lambda_max = None, lambda_min_ratio = 0.0001, regularization = 'ridge', 
+                              different_validation_losses = False, include_rf = True):
 
-def least_squares_loss(B_new, X, c):
-    n = X.shape[1]
-    residuals = np.dot(B_new, X) - c
-    error = (1/n)*(1/2)*np.linalg.norm(residuals)**2
-    return error
+    # Set up data
+    d_feasibleregion = 2 * p_features * (p_features - 1)
+    sources, destinations = convert_grid_to_list(grid_dim, grid_dim)
+    sp_graph = shortest_path_graph(sources = sources, destinations = destinations,
+            start_node = 1, end_node = grid_dim^2, acyclic = True)
+    B_true = np.array([[bernoulli(0.5) for k in range(p_features)] for e in range(d_feasibleregion)])
+    X_train, c_train = generate_poly_kernel_data_simple(B_true, n_train, polykernel_degree, polykernel_noise_half_width)
+    X_validation, c_validation = generate_poly_kernel_data_simple(B_true, n_holdout, polykernel_degree, polykernel_noise_half_width)
+    X_test, c_test = generate_poly_kernel_data_simple(B_true, n_test, polykernel_degree, polykernel_noise_half_width)
 
-def absolute_loss(B_new, X, c):
-    n = X.shape[1]
-    residuals = np.dot(B_new, X) - c
-    error = (1/n)*np.linalg.norm(residuals, 1)
-    return error
+    # Solve the shortest path problem
+    G = define_graph(grid_dim, showflag=False)
+    solver = Shortest_path_solver(G)
+    z_test, w_test = batch_solve(solver, c_test)
 
-def spo_plus_loss(B_new, X, c, solver, z_star=[], w_star=[]):
-    if z_star == [] or w_star == []:
-        z_star, w_star = batch_solve(solver, c)
-    spo_plus_sum = 0
-    z_star = np.transpose(np.array(z_star))
-    n = X.shape[0]
-    for i in range(n):
-        c_hat = B_new @ X[:, i]
-        spoplus_cost_vec = 2 * c_hat - c[:, i]
-        z_oracle= solver.solve(spoplus_cost_vec)[1]
+    # Set validation losses
+    if different_validation_losses:
+        spo_plus_val_loss = 'spo_loss'
+        ls_val_loss = 'least_squares_loss'
+        absolute_val_loss = 'absolute_loss'
+    else:
+        spo_plus_val_loss = 'spo_loss'
+        ls_val_loss = 'spo_loss'
+        absolute_val_loss = 'spo_loss'
+    ### Algorithms ###
 
-        spo_plus_cost = -z_oracle + 2 * np.dot(c_hat, w_star[:, i]) - z_star[i]
-        spo_plus_sum += spo_plus_cost
-
-    spo_plus_avg = spo_plus_sum / n
-    return spo_plus_avg
-
-############################################## Helper function #############################################
-class ShortestPathSolver:
-    def __init__(self,A,b):
-        '''
-        Defines binary optimization problem to solve the shortest path problem with constraint matrix A and RHS b as numpy arrays
-        
-        Parameters:
-            np.array A: constraint matrix A
-            np.array b: RHS of constraints
-        '''
-        if A.shape[0] != b.size:
-            print('invalid input')
-            return
-        numedges = A.shape[1]
-        self.c = cp.Parameter(numedges)
-        self.w = cp.Variable(numedges, nonneg=True)
-        self.prob = cp.Problem(cp.Minimize(self.c@self.w), 
-                               [A @ self.w == b, self.w <= 1]) #add a trivial inequality constraint because necessary for GLPK_MI solver
-        
-    def solve(self,c):
-        '''
-        Solves the predefined optmiization problem with cost vector c and returns the decision variable array
-        
-        Parameters:
-            np.array c: cost vector 
-            np.array b: RHS of constraints
-        
-        Returns:
-            np.array of the solution to the shortest path problem
-        '''
-        self.c.project_and_assign(c)
-        self.prob.solve()
-        return self.w.value
-
-def CreateShortestPathConstraints(gridsize):
-    '''
-    Generate constraints for the nxn grid shortest path problem. 
-    Each node in the grid has a constraint where the LHS is the inflows - outflows and the RHS is the desired flow.
-    The desired flow is 0 for all nodes except for the start node where it's -1 and end node where it's 1
+    # SPO+
+    best_B_SPOplus, best_lambda_SPOplus = validation_set_alg(X_train, c_train, X_validation, c_validation, solver, sp_graph = sp_graph,
+        val_alg_parms = ValParms(algorithm_type = 'sp_spo_plus_reform', validation_loss = spo_plus_val_loss),
+        path_alg_parms = PathParms(num_lambda = num_lambda, lambda_max = lambda_max, 
+                                                regularization = regularization,
+                                                lambda_min_ratio = lambda_min_ratio, algorithm_type = 'SPO_plus'))
+    best_B_leastSquares, best_lambda_leastSquares = validation_set_alg(X_train, c_train, X_validation, c_validation, solver, sp_graph = sp_graph,
+        val_alg_parms = ValParms(algorithm_type = 'ls_jump', validation_loss = ls_val_loss),
+        path_alg_parms = PathParms(num_lambda = num_lambda, lambda_max = lambda_max, 
+                                                regularization = regularization,
+                                                lambda_min_ratio = lambda_min_ratio, algorithm_type = 'leastSquares'))
+    best_B_Absolute, best_lambda_Absolute = validation_set_alg(X_train, c_train, X_validation, c_validation, solver, sp_graph = sp_graph,
+        val_alg_parms = ValParms(algorithm_type = 'ls_jump', validation_loss = absolute_val_loss),
+        path_alg_parms = PathParms(num_lambda = num_lambda, lambda_max = lambda_max, 
+                                                regularization = regularization,
+                                                po_loss_function = 'absolute',
+                                            lambda_min_ratio = lambda_min_ratio, algorithm_type = 'Absolute'))
+    # RF
+    if include_rf:
+        rf_mods = train_random_forests_po(X_train, c_train, rf_alg_parms=rf_graph())
     
-    Parameters:
-        int gridsize: Size of each dimension in grid
-        
-    Returns:
-        np.array A: Flow matrix of shape [num_nodes, num_edges]. Aij is -1 if the edge j is an outflow of node i and 1 if edge edge j is an inflow of node i
-        np.array b: RHS of constraints [num_nodes]
-    '''
-    # define node and edge sizes
-    num_nodes = gridsize**2
-    num_directional_edges = (num_nodes - gridsize) # num vertical edges and num horizontal edges
-    num_edges = num_directional_edges*2 # sum vertical and horizontal edges together
-    
-    # initialize empty A and B arrays
-    A = np.zeros((num_nodes, num_edges), np.int8)
-    b = np.zeros(num_nodes, np.int8)
-    
-    # fill in flow matrix
-    # nodes are ordered by rows. ex. in a 3x3 grid the first rows nodes are indices 1,2,3 and second row is 4,5,6
-    # horizontal edges are enumerated first and then vertical edges
-    horizontaledgepointer = 0
-    verticaledgepointer = 0
-    for i in range(num_directional_edges):
-        # update flow matrix for horizontal edges
-        outnode = horizontaledgepointer
-        innode = horizontaledgepointer + 1
-        
-        A[outnode, i] = -1
-        A[innode, i] = 1
-        horizontaledgepointer += 1
-        if (horizontaledgepointer + 1)% gridsize == 0:# node is at right edge of the grid so  go to next row
-            horizontaledgepointer += 1
-        
-        # update flow matrix for vertical edges
-        outnode = verticaledgepointer
-        innode = verticaledgepointer + gridsize
-        A[outnode, num_directional_edges + i] = -1
-        A[innode, num_directional_edges + i] = 1
-        verticaledgepointer += gridsize
-        if verticaledgepointer + gridsize >= num_nodes:# node is at bottom edge of the grid so go to next column
-            verticaledgepointer = (verticaledgepointer % gridsize) + 1
-        
-    # update RHS for start and end nodes
-    b[0] = -1
-    b[-1] = 1 
-    return A, b
+    # Baseline
+    c_bar_train = np.mean(c_train, axis=1, keepdims=True)
 
-def ridge(X, c, reg_param):
-    p, n = X.shape
-    d, n2 = c.shape
-    if n != n2:
-        raise ValueError("dimensions are mismatched")
-    Xt = X.T
-    ct = c.T
-    Bt = np.linalg.inv(X @ Xt + n * reg_param * np.eye(p)) @ (X @ ct)
-    return Bt.T
+    ### Populate final results ###
+    final_results = replication_results()
+
+    final_results.SPOplus_spoloss_test = spo_loss(best_B_SPOplus, X_test, c_test, solver)
+    final_results.LS_spoloss_test = spo_loss(best_B_leastSquares, X_test, c_test, solver)
+    final_results.Absolute_spoloss_test = spo_loss(best_B_Absolute, X_test, c_test, solver)
+    c_bar_test_preds = np.zeros((d_feasibleregion, n_test))
+
+    if include_rf:
+        rf_preds_test = predict_random_forests_po(rf_mods, X_test)
+        final_results.RF_spoloss_test = spo_loss(np.matrix(np.eye(d_feasibleregion)), rf_preds_test, c_test, solver)
+    else:
+        final_results.RF_spoloss_test = None
+
+    # c_bar_test_preds = np.zeros((d_feasibleregion, n_test))
+    # for i in range(n_test):
+    #     c_bar_test_preds[:, i] = c_bar_train
+    # final_results.Baseline_spoloss_test = spo_loss(np.matrix(np.eye(d_feasibleregion)), c_bar_test_preds, c_test, solver)
+
+    final_results.zstar_avg_test = np.mean(z_test)
+
+    return final_results
+
+def shortest_path_multiple_replications(rng_seed, num_trials, grid_dim, n_train_vec, n_test, p_features, polykernel_degree_vec, polykernel_noise_half_width_vec, num_lambda=10, lambda_max=None, lambda_min_ratio=0.0001, holdout_percent=0.25, regularization='ridge', different_validation_losses=False, include_rf=True):
+    np.random.seed(rng_seed)
+    big_results_df = make_blank_complete_df()
+
+    for n_train in n_train_vec:
+        for polykernel_degree in polykernel_degree_vec:
+            for polykernel_noise_half_width in polykernel_noise_half_width_vec:
+                print(f"Moving on to n_train = {n_train}, polykernel_degree = {polykernel_degree}, polykernel_noise_half_width = {polykernel_noise_half_width}")
+                for trial in range(num_trials):
+                    print(f"Current trial is {trial}")
+                    n_holdout = round(holdout_percent*n_train)
+
+                    current_results = shortest_path_replication(grid_dim,
+                        n_train, n_holdout, n_test,
+                        p_features, polykernel_degree, polykernel_noise_half_width,
+                        num_lambda=num_lambda, lambda_max=lambda_max, lambda_min_ratio=lambda_min_ratio,
+                        regularization=regularization,
+                        different_validation_losses=different_validation_losses,
+                        include_rf=include_rf)
+
+                    current_df_row = build_complete_row(grid_dim,
+                        n_train, n_holdout, n_test,
+                        p_features, polykernel_degree, polykernel_noise_half_width, current_results)
+
+                    big_results_df = pd.concat([big_results_df, current_df_row])
+
+    return big_results_df
 
 ############################################## Reformulation function #############################################
 def sp_reformulation_path(X, c, solver, sp_graph, path_alg_parms):
