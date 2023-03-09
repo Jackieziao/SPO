@@ -3,12 +3,56 @@ This library including all the functions used for the modelling and reformulatio
 
 ''' 
 from type_library import *
-from pre_library import *
-from pre_library import spo_loss
+from model_library import batch_solve
 import cvxpy as cp
 from sklearn.ensemble import RandomForestRegressor
 import numpy as np
 
+############################################## Loss function #############################################
+def spo_loss(B_new, X, c, solver, z_star=[]):
+    if z_star == []:
+        z_star, w_star =batch_solve(solver, c)
+    n = z_star.shape[1]
+    spo_sum = 0
+    for i in range(n):
+        c_hat = np.dot(B_new, X[:, i])
+        # c_hat = B_new@X[:, i]
+        w_oracle = solver.solve(c_hat)[0]
+        spo_loss_cur = np.dot(c[:, i], w_oracle) - z_star[:, i]
+        spo_sum += spo_loss_cur
+    spo_loss_avg = spo_sum / n
+    return spo_loss_avg
+
+def least_squares_loss(B_new, X, c):
+    n = X.shape[1]
+    residuals = np.dot(B_new, X) - c
+    error = (1/n)*(1/2)*np.linalg.norm(residuals)**2
+    return error
+
+def absolute_loss(B_new, X, c):
+    n = X.shape[1]
+    residuals = np.dot(B_new, X) - c
+    error = (1/n)*np.linalg.norm(residuals, 1)
+    return error
+
+def spo_plus_loss(B_new, X, c, solver, z_star=[], w_star=[]):
+    if z_star == [] or w_star == []:
+        z_star, w_star = batch_solve(solver, c)
+    spo_plus_sum = 0
+    z_star = np.transpose(np.array(z_star))
+    n = X.shape[0]
+    for i in range(n):
+        c_hat = B_new @ X[:, i]
+        spoplus_cost_vec = 2 * c_hat - c[:, i]
+        z_oracle= solver.solve(spoplus_cost_vec)[1]
+
+        spo_plus_cost = -z_oracle + 2 * np.dot(c_hat, w_star[:, i]) - z_star[i]
+        spo_plus_sum += spo_plus_cost
+
+    spo_plus_avg = spo_plus_sum / n
+    return spo_plus_avg
+
+############################################## Helper function #############################################
 class ShortestPathSolver:
     def __init__(self,A,b):
         '''
@@ -104,6 +148,7 @@ def ridge(X, c, reg_param):
     Bt = np.linalg.inv(X @ Xt + n * reg_param * np.eye(p)) @ (X @ ct)
     return Bt.T
 
+############################################## Reformulation function #############################################
 def sp_reformulation_path(X, c, solver, sp_graph, path_alg_parms):
 
     path_alg_parms = PathParms().__dict__
