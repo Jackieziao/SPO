@@ -206,7 +206,7 @@ def sp_reformulation_path(X, c, solver, sp_graph, path_alg_parms):
             objective += n*(lambda_/2)*cp.atoms.norm(B, 'fro')
             prob = cp.Problem(cp.Minimize(objective), 
                                         [(P@A) <= ((2*(X@B.T)) - c)])
-        prob.solve()
+        prob.solve(solver='SCS')
         B_matrix = B.value
         if B_matrix is None:
             B_matrix = np.zeros((d, p))
@@ -218,7 +218,7 @@ def leastSquares_path_jump(X, c, solver, sp_graph, path_alg_parms):
     path_alg_parms = PathParms().__dict__
     sp_graph_parms = sp_graph
     sources = sp_graph_parms['sources']
-    destinations = sp_graph_parms['destinations']
+    # destinations = sp_graph_parms['destinations']
     grid_dim = sp_graph_parms['grid_dim']
     lambda_max = path_alg_parms['lambda_max']
     lambda_min_ratio = path_alg_parms['lambda_min_ratio']
@@ -231,8 +231,8 @@ def leastSquares_path_jump(X, c, solver, sp_graph, path_alg_parms):
     if n != n2:
         raise ValueError("Dimensions of the input are mismatched.")
     # Process graph
-    nodes = set(sources) | set(destinations)
-    n_nodes = len(nodes)
+    # nodes = set(sources) | set(destinations)
+    # n_nodes = len(nodes)
     n_edges = len(sources)
     if n_edges != d:
         raise ValueError("Dimensions of the input are mismatched.")
@@ -242,7 +242,7 @@ def leastSquares_path_jump(X, c, solver, sp_graph, path_alg_parms):
     X = X.T
     c = c.T
     solver = ShortestPathSolver(A, b)
-    W = np.apply_along_axis(solver.solve, 1, c)#W has shape [num_samples, num_edges]
+    W = np.apply_along_axis(solver.solve, 1, c) #W has shape [num_samples, num_edges]
     #define linear program variables
     B = cp.Variable((d, p)) #B has shape [num_edges, num_features]
 
@@ -283,10 +283,12 @@ def leastSquares_path_jump(X, c, solver, sp_graph, path_alg_parms):
         else:
             obj_expr_full = obj_expr_noreg + n*(lambda_/2)*cp.atoms.norm(B, 'fro')
             prob = cp.Problem(cp.Minimize(obj_expr_full), constraint)
-        prob.solve(solver=solver)
+
+        # prob.solve(solver=solver, verbose=True)
+        prob.solve(solver='SCS')
         B_matrix = B.value
-        if B_matrix is None:
-            B_matrix = np.zeros((d, p))
+        # if B_matrix is None:
+        #     B_matrix = np.zeros((d, p))
         B_soln_list.append(B_matrix)
     return B_soln_list, lambdas
 

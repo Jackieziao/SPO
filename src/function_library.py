@@ -165,6 +165,7 @@ def sp_reformulation_path(X, c, solver, sp_graph, path_alg_parms):
         theta = cp.Variable((d, p))
     B_soln_list = []
 
+
     for lambda_ in lambdas:
         if regularization == 'lasso':
             objective += n*lambda_*cp.sum(theta)
@@ -173,7 +174,7 @@ def sp_reformulation_path(X, c, solver, sp_graph, path_alg_parms):
             objective += n*(lambda_/2)*cp.atoms.norm(B, 'fro')
             prob = cp.Problem(cp.Minimize(objective), 
                                         [(P@A) <= ((2*(X@B.T)) - c)])
-        prob.solve()
+        prob.solve(solver = 'SCS')
         B_matrix = B.value
         if B_matrix is None:
             B_matrix = np.zeros((d, p))
@@ -223,7 +224,9 @@ def leastSquares_path_jump(X, c, solver, sp_graph, path_alg_parms):
         # @constraint(mod, c - B_var*X .<= w_var)
         # @constraint(mod, -(c - B_var*X) .<= w_var)
         solver = 'ECOS'
+        # solver = 'SCS'
         obj_expr_noreg = 2*cp.sum(cp.multiply(w, np.ones((d, n))))
+
 
     # Add regularization part
     if lambda_max is None:
@@ -250,7 +253,7 @@ def leastSquares_path_jump(X, c, solver, sp_graph, path_alg_parms):
         else:
             obj_expr_full = obj_expr_noreg + n*(lambda_/2)*cp.atoms.norm(B, 'fro')
             prob = cp.Problem(cp.Minimize(obj_expr_full), constraint)
-        prob.solve(solver=solver)
+        prob.solve(solver = 'SCS')
         B_matrix = B.value
         if B_matrix is None:
             B_matrix = np.zeros((d, p))
